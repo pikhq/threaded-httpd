@@ -1,0 +1,17 @@
+This is a simple threaded httpd. It works by guaranteeing that there is always
+at least one thread in an accept call at any given time. When a thread gets a
+valid return from accept it immediately handles that connection and then
+returns to the accept call again.
+
+The socket has had a timeout set, so after 30 seconds idle an accept call will
+return EAGAIN or EWOULDBLOCK. A thread getting such an error from accept will
+verify that it is not the last thread running, and then exit.
+
+To ensure that this is not patently terrible, each thread only uses a 12k stack
+(or the minimum thread stack size, if it is larger).
+
+This was devised after conversation with Rich Felker ("dalias") of musl libc
+fame, on a design for a simple http daemon. I believe that this http daemon
+should perform reasonably well. I suspect it may not be quite as scalable as
+some other designs, but it should be significantly more scalable than anything
+comparably simple.
