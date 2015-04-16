@@ -70,7 +70,7 @@ static ssize_t full_write(int fd, const void *buf, size_t n)
 	}
 }
 
-static void http_error(int fd, int code)
+static void http_error(int fd, int code, char *http)
 {
 	static const struct {
 		int c;
@@ -89,14 +89,15 @@ static void http_error(int fd, int code)
 
 	for(msg = msgs; msg->c && msg->c != code; msg++);
 
-	dprintf(fd, "HTTP/1.0 %d %s\r\n"
-		    "Content-type: text/html; charset=UTF-8\r\n"
-		    "\r\n"
-		    "<!DOCTYPE html>\n"
+	if(strcmp(http, "HTTP/0.9") != 0)
+		dprintf(fd, "HTTP/1.0 %d %s\r\n"
+			    "Content-type: text/html; charset=UTF-8\r\n"
+			    "\r\n",
+			    code, msg->c ? msg->msg : "Error");
+	dprintf(fd, "<!DOCTYPE html>\n"
 		    "<title>%d %s</title>\n"
 		    "<h1>%d Error</h1>\n"
 		    "%s\n",
-		    code, msg->c ? msg->msg : "Error",
 		    code, msg->c ? msg->msg : "error",
 		    code,
 		    msg->c ? msg->msg : "An error occured in the request.");
@@ -114,15 +115,29 @@ static int read_request(int fd, struct request *req)
 		}
 		req->buf_i += n;
 		if(memmem(req->buf, req->buf_i, "\r\n\r\n", 4)) return 0;
+		if(req->buf_i >= 6) {
+			// Search for an HTTP/0.9 request
+			if(strncmp("GET ", req->buf, 4) == 0) {
+				int i;
+				for(i = 5; i < req->buf_i; i++) {
+					if(req->buf[i] == ' '
+					  || req->buf[i] == '\r'
+					  || req->buf[i] == '\n')
+						break;
+				}
+				if(req->buf[i] == '\r' || req->buf[i] == '\n')
+					return 0;
+			}
+		}
 		if(req->buf_i == sizeof(req->buf)) {
 			if(memmem(req->buf, req->buf_i, "\r\n", 2))
-				http_error(fd, 414);
+				http_error(fd, 414, "HTTP/1.0");
 			else
-				http_error(fd, 413);
+				http_error(fd, 413, "HTTP/1.0");
 			return -1;
 		}
 		if(n == 0) {
-			http_error(fd, 400);
+			http_error(fd, 400, "HTTP/1.0");
 			return -1;
 		}
 	}
@@ -167,14 +182,14 @@ static void url_enc(char *s, int f)
 	}
 }
 
-static void do_dir_list(char *s, int c, int f)
+static void do_dir_list(char *s, int c, int f, char *http)
 {
 	DIR *d = fdopendir(f);
 	struct dirent *de, **names=0, **tmp;
 	size_t cnt=0, len=0;
 
 	if(!d) {
-		http_error(c, 503);
+		http_error(c, 503, http);
 		close(f);
 		return;
 	}
@@ -195,16 +210,17 @@ static void do_dir_list(char *s, int c, int f)
 
 	if(errno) {
 		closedir(d);
-		http_error(c, 503);
+		http_error(c, 503, http);
 		if (names) while(cnt-->0) free(names[cnt]);
 		free(names);
 	}
 	qsort(names, cnt, sizeof *names, (int (*)(const void *, const void *))alphasort);
 
-	dprintf(c, "HTTP/1.0 200 OK\r\n"
-	       "Content-Type: text/html; charset=UTF-8\r\n"
-	       "\r\n"
-	       "<!DOCTYPE html>\r\n");
+	if(strcmp(http, "HTTP/0.9") != 0)
+		dprintf(c, "HTTP/1.0 200 OK\r\n"
+		       "Content-Type: text/html; charset=UTF-8\r\n"
+		       "\r\n");
+	dprintf(c, "<!DOCTYPE html>\r\n");
 	for(size_t i = 0; i < cnt; i++) {
 		dprintf(c, "<a href=\"/");
 		url_enc(s, c);
@@ -240,7 +256,7 @@ static void do_dir_list(char *s, int c, int f)
 	closedir(d);
 }
 
-static char *get_path(struct request *req, char **host)
+static char *get_path(struct request *req, char **host, char **http)
 {
 	char *ret, *in, *out;
 	if(!strncmp("http://", req->buf + req->cur, 7)) {
@@ -273,7 +289,11 @@ static char *get_path(struct request *req, char **host)
 		}
 	}
 
-	if(*in == '\r' || *in == '\n') return 0;
+	*http = in;
+	for(; *in != '\r' && *in != '\n'; in++);
+	*in = '\0';
+	if(strcmp(*http, "") == 0) *http = "HTTP/0.9";
+
 	*out = '\0';
 	return ret;
 }
@@ -354,7 +374,7 @@ void *thread(void *fd_p)
 		int c, f;
 		struct request req = {0};
 		struct stat buf;
-		char *url, *tmp;
+		char *url, *tmp, *http;
 		const char *mime;
 		ssize_t n;
 
@@ -395,26 +415,26 @@ void *thread(void *fd_p)
 		case HTTP_GET:
 			break;
 		default:
-			http_error(c, 501);
+			http_error(c, 501, "HTTP/1.0");
 			close(c);
 			continue;
 		}
 
-		url = get_path(&req, &(char*){0});
+		url = get_path(&req, &(char*){0}, &http);
 		if(!url) {
-			http_error(c, 400);
+			http_error(c, 400, http);
 			close(c);
 			continue;
 		}
 
 		if((tmp = strstr(url, "/../"))) {
-			http_error(c, 403);
+			http_error(c, 403, http);
 			close(c);
 			continue;
 		}
 		if((tmp = strrchr(url, '/'))) {
 			if(strcmp(tmp, "/..") == 0) {
-				http_error(c, 403);
+				http_error(c, 403, http);
 				close(c);
 				continue;
 			}
@@ -426,16 +446,16 @@ void *thread(void *fd_p)
 		if(f < 0) {
 			switch(errno) {
 			case ENOENT:
-				http_error(c, 404);
+				http_error(c, 404, http);
 				break;
 			case EACCES:
-				http_error(c, 403);
+				http_error(c, 403, http);
 				break;
 			case ENFILE:
-				http_error(c, 503);
+				http_error(c, 503, http);
 				break;
 			default:
-				http_error(c, 500);
+				http_error(c, 500, http);
 				break;
 			}
 			close(c);
@@ -443,7 +463,7 @@ void *thread(void *fd_p)
 		}
 
 		if(fstat(f, &buf) < 0) {
-			http_error(c, 500);
+			http_error(c, 500, http);
 			close(c);
 			close(f);
 			continue;
@@ -463,19 +483,21 @@ void *thread(void *fd_p)
 			}
 
 			if(tmp_f < 0) {
-				do_dir_list(tmp, c, f);
+				do_dir_list(tmp, c, f, http);
 				close(c);
 				continue;
 			}
 		}
 
-		if(dprintf(c, "HTTP/1.0 200 OK\r\n") < 0)
-			syslog(LOG_ERR, "dprintf: %m");
-		if(mime)
-			if(dprintf(c, "Content-Type: %s\r\n", mime) < 0)
+		if(strcmp(http, "HTTP/0.9") != 0) {
+			if(dprintf(c, "HTTP/1.0 200 OK\r\n") < 0)
 				syslog(LOG_ERR, "dprintf: %m");
-		if(dprintf(c, "Content-Length: %jd\r\n\r\n", (intmax_t)buf.st_size) < 0)
-			syslog(LOG_ERR, "dprintf: %m");
+			if(mime)
+				if(dprintf(c, "Content-Type: %s\r\n", mime) < 0)
+					syslog(LOG_ERR, "dprintf: %m");
+			if(dprintf(c, "Content-Length: %jd\r\n\r\n", (intmax_t)buf.st_size) < 0)
+				syslog(LOG_ERR, "dprintf: %m");
+		}
 
 		while((n = sendfile(c, f, 0, 500 * 1024 * 1024)) > 0);
 		if(n < 0) syslog(LOG_ERR, "sendfile: %m");
