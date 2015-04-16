@@ -20,6 +20,7 @@
 #include <signal.h>
 #include <stdlib.h>
 #include <pwd.h>
+#include <ctype.h>
 
 struct request {
 	char buf[4096];
@@ -156,52 +157,84 @@ static int fromhex(char c)
 	return -1;
 }
 
-static void do_dir_list(int c, int f)
+static void url_enc(char *s, int f)
 {
-	/*
-	struct dirent **namelist;
-	int count;
-	count = scandirat(f, ".", &namelist, filter, alphasort);
-	if(count < 0) {
-		http_error(c, 500);
+	for(; *s; s++) {
+		char *c = (char[4]){ *s, 0 };
+		if(!isalnum(*s) && *s != '-' && *s != '_' && *s != '.' && *s != '~')
+			sprintf(c, "%%%.2X", (unsigned)*s);
+		dprintf(f, "%s", c);
+	}
+}
+
+static void do_dir_list(char *s, int c, int f)
+{
+	DIR *d = fdopendir(f);
+	struct dirent *de, **names=0, **tmp;
+	size_t cnt=0, len=0;
+
+	if(!d) {
+		http_error(c, 503);
 		return;
 	}
-	dprintf(2, "HTTP/1.0 200 OK\r\n"
+
+	while((errno=0), (de = readdir(d))) {
+		if(de->d_name[0] == '.') continue;
+		if(cnt >= len) {
+			len = 2*len+1;
+			if (len > SIZE_MAX/sizeof *names) break;
+			tmp = realloc(names, len * sizeof *names);
+			if (!tmp) break;
+			names = tmp;
+		}
+		names[cnt] = malloc(de->d_reclen);
+		if (!names[cnt]) break;
+		memcpy(names[cnt++], de, de->d_reclen);
+	}
+
+	if(errno) {
+		http_error(c, 503);
+		if (names) while(cnt-->0) free(names[cnt]);
+		free(names);
+	}
+	qsort(names, cnt, sizeof *names, (int (*)(const void *, const void *))alphasort);
+
+	dprintf(c, "HTTP/1.0 200 OK\r\n"
 	       "Content-Type: text/html; charset=UTF-8\r\n"
 	       "\r\n"
 	       "<!DOCTYPE html>\r\n");
-	for(int i = 0; i < count; i++) {
-		dprintf(2, "<a href=\"/");
-		url_enc(s);
-		dprintf(2, "/");
-		url_enc(namelist[i]->d_name);
-		dprintf(2, "\">");
-		for(size_t j = 0; namelist[i]->d_name[j]; j++) {
-			switch(namelist[i]->d_name[j]) {
+	for(size_t i = 0; i < cnt; i++) {
+		dprintf(c, "<a href=\"/");
+		url_enc(s, c);
+		dprintf(c, "/");
+		url_enc(names[i]->d_name, c);
+		dprintf(c, "\">");
+		for(size_t j = 0; names[i]->d_name[j]; j++) {
+			switch(names[i]->d_name[j]) {
 			case '<':
-				dprintf(2, "&lt;");
+				dprintf(c, "&lt;");
 				break;
 			case '>':
-				dprintf(2, "&gt;");
+				dprintf(c, "&gt;");
 				break;
 			case '&':
-				dprintf(2, "&amp;");
+				dprintf(c, "&amp;");
 				break;
 			case '"':
-				dprintf(2, "&quot;");
+				dprintf(c, "&quot;");
 				break;
 			case '\'':
-				dprintf(2, "&apos;");
+				dprintf(c, "&apos;");
 				break;
 			default:
-				dprintf(2, "%c", namelist[i]->d_name[j]);
+				dprintf(c, "%c", names[i]->d_name[j]);
 			}
 		}
-		dprintf(2, "</a><br/>\r\n");
+		dprintf(c, "</a><br/>\r\n");
+		free(names[i]);
 	}
-	free(namelist);
-	*/
-	http_error(c, 503);
+
+	free(names);
 }
 
 static char *get_path(struct request *req, char **host)
@@ -427,7 +460,7 @@ void *thread(void *fd_p)
 			}
 
 			if(tmp_f < 0) {
-				do_dir_list(c, f);
+				do_dir_list(tmp, c, f);
 				close(c);
 				close(f);
 				continue;
