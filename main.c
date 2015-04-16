@@ -344,23 +344,32 @@ void *thread(void *fd_p)
 		}
 
 		if(S_ISDIR(buf.st_mode)) {
-			int tmp_f;
-			tmp_f = openat(f, "index.html", O_RDONLY);
+			int tmp_f = openat(f, "index.html", O_RDONLY);
 			if(tmp_f >= 0) {
-				close(f);
-				f = tmp_f;
-			} else {
-				do_dir_list(c, f);
+				if(fstat(tmp_f, &buf) < 0 || S_ISDIR(buf.st_mode)) {
+					close(tmp_f);
+					tmp_f = -1;
+				} else {
+					close(f);
+					f = tmp_f;
+				}
 			}
-			close(c);
-			close(f);
-			continue;
+
+			if(tmp_f < 0) {
+				do_dir_list(c, f);
+				close(c);
+				close(f);
+				continue;
+			}
 		}
 
-		dprintf(c, "HTTP/1.0 200 OK\r\n"
-			   "Content-Length: %jd\r\n\r\n", (intmax_t)buf.st_size);
+		if(dprintf(c, "HTTP/1.0 200 OK\r\n"
+			   "Content-Length: %jd\r\n\r\n", (intmax_t)buf.st_size) < 0) {
+			syslog(LOG_ERR, "dprintf: %m");
+		}
 
 		while((n = sendfile(c, f, 0, 500 * 1024 * 1024)) > 0);
+		if(n < 0) syslog(LOG_ERR, "sendfile: %m");
 		close(c);
 		close(f);
 	}
