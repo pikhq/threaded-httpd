@@ -71,7 +71,34 @@ static ssize_t full_write(int fd, const void *buf, size_t n)
 
 static void http_error(int fd, int code)
 {
-	dprintf(fd, "HTTP/1.0 %d Error\r\n\r\n%d error\r\n", code, code);
+	static const struct {
+		int c;
+		char msg[25];
+	} *msg, msgs[] = {
+		{400, "Bad Request"},
+		{403, "Forbidden"},
+		{404, "Not Found"},
+		{413, "Request Entity Too Large"},
+		{414, "Request-URI Too Long"},
+		{500, "Internal Server Error"},
+		{501, "Not Implemented"},
+		{503, "Service Unavailable"},
+		{}
+	};
+
+	for(msg = msgs; msg->c && msg->c != code; msg++);
+
+	dprintf(fd, "HTTP/1.0 %d %s\r\n"
+		    "Content-type: text/html; charset=UTF-8\r\n"
+		    "\r\n"
+		    "<!DOCTYPE html>\n"
+		    "<title>%d %s</title>\n"
+		    "<h1>%d Error</h1>\n"
+		    "%s\n",
+		    code, msg->c ? msg->msg : "Error",
+		    code, msg->c ? msg->msg : "error",
+		    code,
+		    msg->c ? msg->msg : "An error occured in the request.");
 }
 
 static int read_request(int fd, struct request *req)
