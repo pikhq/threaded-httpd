@@ -413,6 +413,7 @@ void *thread(void *fd_p)
 		ssize_t n;
 		int method;
 		int close_conn = 1;
+		time_t if_mod = 0;
 
 		sem_post(&sem);
 		c = accept(fd, (struct sockaddr[]){0}, (socklen_t[]){sizeof(struct sockaddr)});
@@ -443,6 +444,7 @@ void *thread(void *fd_p)
 		}
 
 	next_req:
+		if_mod = 0;
 		if(read_request(c, &req) < 0) {
 			close(c);
 			continue;
@@ -477,6 +479,18 @@ void *thread(void *fd_p)
 				if(strcmp(http, "HTTP/1.1") == 0
 				  && strcmp(val, "close") == 0)
 					close_conn = 1;
+			}
+			if(head && strcmp(head, "If-Modified-Since") == 0) {
+				char *end;
+				struct tm tmp;
+				end = strptime(val, "%a, %d %b %Y %H:%M:%S GMT", &tmp);
+				if(!end || *end)
+					end = strptime(val, "%A, %d-%b-%y %H:%M:%S GMT", &tmp);
+				if(!end || *end)
+					end = strptime(val, "%a %b %d %H:%M:%S %Y", &tmp);
+				if(end && !*end) {
+					if_mod = timegm(&tmp);
+				}
 			}
 		} while(head && val);
 
@@ -550,6 +564,7 @@ void *thread(void *fd_p)
 
 		if(strcmp(http, "HTTP/0.9") != 0) {
 			char date[50], mtime[50], expires[50];
+			char *resp = "200 OK";
 			time_t cur;
 			time_t exp;
 			struct tm tmp;
@@ -563,7 +578,11 @@ void *thread(void *fd_p)
 			gmtime_r(&exp, &tmp);
 			strftime(expires, sizeof expires, "%a, %d %b %Y %H:%M:%S GMT", &tmp);
 
-			if(dprintf(c, "%s 200 OK\r\n", http) < 0)
+			if(if_mod && if_mod >= buf.st_mtim.tv_sec) {
+				resp = "304 Not Modified";
+			}
+
+			if(dprintf(c, "%s %s\r\n", http, resp) < 0)
 				syslog(LOG_ERR, "dprintf: %m");
 			if(mime)
 				if(dprintf(c, "Content-Type: %s\r\n", mime) < 0)
@@ -577,7 +596,7 @@ void *thread(void *fd_p)
 				syslog(LOG_ERR, "dprintf: %m");
 		}
 
-		if(method != HTTP_HEAD) {
+		if(method != HTTP_HEAD || !if_mod) {
 			while((n = sendfile(c, f, 0, 500 * 1024 * 1024)) > 0);
 			if(n < 0) syslog(LOG_ERR, "sendfile: %m");
 		}
