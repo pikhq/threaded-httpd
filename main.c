@@ -175,6 +175,7 @@ static void do_dir_list(char *s, int c, int f)
 
 	if(!d) {
 		http_error(c, 503);
+		close(f);
 		return;
 	}
 
@@ -193,6 +194,7 @@ static void do_dir_list(char *s, int c, int f)
 	}
 
 	if(errno) {
+		closedir(d);
 		http_error(c, 503);
 		if (names) while(cnt-->0) free(names[cnt]);
 		free(names);
@@ -235,6 +237,7 @@ static void do_dir_list(char *s, int c, int f)
 	}
 
 	free(names);
+	closedir(d);
 }
 
 static char *get_path(struct request *req, char **host)
@@ -462,7 +465,6 @@ void *thread(void *fd_p)
 			if(tmp_f < 0) {
 				do_dir_list(tmp, c, f);
 				close(c);
-				close(f);
 				continue;
 			}
 		}
