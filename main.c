@@ -378,6 +378,7 @@ void *thread(void *fd_p)
 		char *url, *tmp, *http;
 		const char *mime;
 		ssize_t n;
+		int method;
 
 		sem_post(&sem);
 		c = accept(fd, (struct sockaddr[]){0}, (socklen_t[]){sizeof(struct sockaddr)});
@@ -412,8 +413,10 @@ void *thread(void *fd_p)
 			close(c);
 			continue;
 		}
-		switch(get_method(&req)) {
+		switch((method = get_method(&req))) {
 		case HTTP_GET:
+			break;
+		case HTTP_HEAD:
 			break;
 		default:
 			http_error(c, 501, "HTTP/1.0");
@@ -484,7 +487,13 @@ void *thread(void *fd_p)
 			}
 
 			if(tmp_f < 0) {
-				do_dir_list(tmp, c, f, http);
+				if(method == HTTP_HEAD) {
+					dprintf(c, "HTTP/1.0 200 OK\r\n"
+					       "Content-Type: text/html; charset=UTF-8\r\n"
+					       "\r\n");
+				} else {
+					do_dir_list(tmp, c, f, http);
+				}
 				close(c);
 				continue;
 			}
@@ -519,8 +528,10 @@ void *thread(void *fd_p)
 				syslog(LOG_ERR, "dprintf: %m");
 		}
 
-		while((n = sendfile(c, f, 0, 500 * 1024 * 1024)) > 0);
-		if(n < 0) syslog(LOG_ERR, "sendfile: %m");
+		if(method != HTTP_HEAD) {
+			while((n = sendfile(c, f, 0, 500 * 1024 * 1024)) > 0);
+			if(n < 0) syslog(LOG_ERR, "sendfile: %m");
+		}
 		close(c);
 		close(f);
 	}
