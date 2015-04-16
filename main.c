@@ -242,6 +242,74 @@ static char *get_path(struct request *req, char **host)
 	return ret;
 }
 
+static const char *mime_type(char *path)
+{
+	char *end = strrchr(path, '.');
+	static const struct {
+		char *ext;
+		char *mime;
+	} *p, map[] = {
+		{ ".pdf", "application/pdf" },
+		{ ".ogg", "application/ogg" },
+		{ ".bin", "application/octet-stream" },
+		{ ".json", "application/json; charset=UTF-8" },
+		{ ".ps", "application/postscript" },
+		{ ".rdf", "application/rdf+xml; charset=UTF-8" },
+		{ ".rss", "application/rss+xml; charset=UTF-8" },
+		{ ".xml", "application/xml; charset=UTF-8" },
+		{ ".xhtml", "application/xhtml+xml; charset=UTF-8" },
+		{ ".zip", "application/zip" },
+		{ ".gz", "application/gzip" },
+		{ ".tar", "application/x-tar" },
+		{ ".atom", "application/atom+xml; charset=UTF-8" },
+		{ ".woff", "application/font-woff" },
+		{ ".m4a", "audio/mp4" },
+		{ ".mp1", "audio/mpeg" },
+		{ ".mp2", "audio/mpeg" },
+		{ ".mp3", "audio/mpeg" },
+		{ ".m1a", "audio/mpeg" },
+		{ ".m2a", "audio/mpeg" },
+		{ ".mpa", "audio/mpeg" },
+		{ ".oga", "audio/ogg" },
+		{ ".flac", "audio/flac" },
+		{ ".opus", "audio/opus" },
+		{ ".ra", "audio/vnd.rn-realaudio" },
+		{ ".wav", "audio/vnd.wave" },
+		{ ".webm", "video/webm" },
+		{ ".gif", "image/gif" },
+		{ ".jpeg", "image/jpeg" },
+		{ ".jpg", "image/jpeg" },
+		{ ".png", "image/png" },
+		{ ".svg", "image/svg+xml; charset=UTF-8" },
+		{ ".tiff", "image/tiff" },
+		{ ".djvu", "image/vnd.djvu" },
+		{ ".djv", "image/vnd.djvu" },
+		{ ".txt", "text/plain; charset=UTF-8" },
+		{ ".vcf", "text/vcard; charset=UTF-8" },
+		{ ".vcard", "text/vcard; charset=UTF-8" },
+		{ ".html", "text/html; charset=UTF-8" },
+		{ ".htm", "text/html; charset=UTF-8" },
+		{ ".css", "text/css; charset=UTF-8" },
+		{ ".avi", "video/avi" },
+		{ ".mpg", "video/mpeg" },
+		{ ".mpeg", "video/mpeg" },
+		{ ".m1v", "video/mpeg" },
+		{ ".mpv", "video/mpeg" },
+		{ ".mp4", "video/mp4" },
+		{ ".m4v", "video/mp4" },
+		{ ".mkv", "video/x-matroska" },
+		{ ".wmv", "video/x-ms-wmv" },
+		{ ".flv", "video/x-flv" },
+		{ }
+	};
+	if(!end) return NULL;
+	for(p = map; p->ext; p++) {
+		if(strcmp(end, p->ext) == 0)
+			return p->mime;
+	}
+	return NULL;
+}
+
 void *thread(void *fd_p)
 {
 	int fd = *(int*)fd_p;
@@ -251,6 +319,7 @@ void *thread(void *fd_p)
 		struct request req = {0};
 		struct stat buf;
 		char *url, *tmp;
+		const char *mime;
 		ssize_t n;
 
 		sem_post(&sem);
@@ -316,6 +385,7 @@ void *thread(void *fd_p)
 		}
 		for(tmp = url; *tmp == '/'; tmp++);
 		if(strcmp(tmp, "") == 0) tmp = ".";
+		mime = mime_type(tmp);
 		f = open(tmp, O_RDONLY);
 		if(f < 0) {
 			switch(errno) {
@@ -350,6 +420,7 @@ void *thread(void *fd_p)
 					close(tmp_f);
 					tmp_f = -1;
 				} else {
+					mime = "text/html; charset=UTF-8";
 					close(f);
 					f = tmp_f;
 				}
@@ -363,10 +434,13 @@ void *thread(void *fd_p)
 			}
 		}
 
-		if(dprintf(c, "HTTP/1.0 200 OK\r\n"
-			   "Content-Length: %jd\r\n\r\n", (intmax_t)buf.st_size) < 0) {
+		if(dprintf(c, "HTTP/1.0 200 OK\r\n") < 0)
 			syslog(LOG_ERR, "dprintf: %m");
-		}
+		if(mime)
+			if(dprintf(c, "Content-Type: %s\r\n", mime) < 0)
+				syslog(LOG_ERR, "dprintf: %m");
+		if(dprintf(c, "Content-Length: %jd\r\n\r\n", (intmax_t)buf.st_size) < 0)
+			syslog(LOG_ERR, "dprintf: %m");
 
 		while((n = sendfile(c, f, 0, 500 * 1024 * 1024)) > 0);
 		if(n < 0) syslog(LOG_ERR, "sendfile: %m");
