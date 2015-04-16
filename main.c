@@ -21,6 +21,7 @@
 #include <stdlib.h>
 #include <pwd.h>
 #include <ctype.h>
+#include <netinet/tcp.h>
 
 struct request {
 	char buf[4096];
@@ -555,6 +556,7 @@ int main()
 	}
 	setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, (int[]){1}, sizeof(int));
 	setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &(struct timeval){.tv_sec = 30}, sizeof(struct timeval));
+	setsockopt(fd, SOL_TCP, TCP_FASTOPEN, (int[]){100}, sizeof(int));
 	if(bind(fd, res->ai_addr, res->ai_addrlen) < 0) {
 		perror("error");
 		return 1;
