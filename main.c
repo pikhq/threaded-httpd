@@ -491,12 +491,31 @@ void *thread(void *fd_p)
 		}
 
 		if(strcmp(http, "HTTP/0.9") != 0) {
+			char date[50], mtime[50], expires[50];
+			time_t cur;
+			time_t exp;
+			struct tm tmp;
+			cur = time(0);
+			gmtime_r(&cur, &tmp);
+			strftime(date, sizeof date, "%a, %d %b %Y %H:%M:%S GMT", &tmp);
+			gmtime_r(&buf.st_mtim.tv_sec, &tmp);
+			strftime(mtime, sizeof mtime, "%a, %d %b %Y %H:%M:%S GMT", &tmp);
+			// expire in a day; just a guess for static files
+			exp = cur + 60*60*24;
+			gmtime_r(&exp, &tmp);
+			strftime(expires, sizeof expires, "%a, %d %b %Y %H:%M:%S GMT", &tmp);
+
 			if(dprintf(c, "HTTP/1.0 200 OK\r\n") < 0)
 				syslog(LOG_ERR, "dprintf: %m");
 			if(mime)
 				if(dprintf(c, "Content-Type: %s\r\n", mime) < 0)
 					syslog(LOG_ERR, "dprintf: %m");
-			if(dprintf(c, "Content-Length: %jd\r\n\r\n", (intmax_t)buf.st_size) < 0)
+			if(dprintf(c, "Content-Length: %jd\r\n"
+				       "Date: %s\r\n"
+				       "Last-Modified: %s\r\n"
+				       "Expires: %s\r\n\r\n",
+				       (intmax_t)buf.st_size, date, mtime,
+				       expires) < 0)
 				syslog(LOG_ERR, "dprintf: %m");
 		}
 
