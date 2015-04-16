@@ -443,6 +443,8 @@ void *thread(void *fd_p)
 			sem_post(&sem);
 		}
 
+		setsockopt(c, SOL_SOCKET, SO_RCVTIMEO, (int[]){15}, sizeof(int));
+
 	next_req:
 		if_mod = 0;
 		if(read_request(c, &req) < 0) {
