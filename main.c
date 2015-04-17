@@ -635,15 +635,22 @@ int main()
 
 	int status;
 	struct addrinfo hints = {
-		.ai_family = AF_UNSPEC,
+		.ai_family = AF_INET6,
 		.ai_socktype = SOCK_STREAM,
-		.ai_flags = AI_PASSIVE
+		.ai_flags = AI_V4MAPPED | AI_PASSIVE
 	};
 	struct addrinfo *res;
 
 	signal(SIGPIPE, SIG_IGN);
 
 	if((status = getaddrinfo(NULL, "8080", &hints, &res)) != 0) {
+		if(status == EAI_ADDRFAMILY) {
+			hints.ai_family = AF_INET;
+			status = getaddrinfo(NULL, "8080", &hints, &res);
+		}
+	}
+
+	if(status) {
 		fprintf(stderr, "error: %s\n", gai_strerror(status));
 		return 1;
 	}
