@@ -231,12 +231,6 @@ static void do_dir_list(char *s, int c, int f, char *http)
 
 	if(strcmp(http, "HTTP/1.1") == 0)
 		chunk = 1;
-	if(strcmp(http, "HTTP/0.9") != 0)
-		dprintf(c, "%s 200 OK\r\n"
-		       "Content-Type: text/html; charset=UTF-8\r\n"
-		       "%s"
-		       "\r\n", http,
-		       chunk ? "Transfer-Encoding: chunked\r\n" : "");
 	dprintf(c, "%s<!DOCTYPE html>\r\n%s", chunk ? "11\r\n" : "",
 			chunk ? "\r\n" : "");
 	for(size_t i = 0; i < cnt; i++) {
@@ -609,27 +603,25 @@ void *thread(void *fd_p)
 		}
 
 		if(S_ISDIR(buf.st_mode)) {
+			struct stat tmp_buf;
 			int tmp_f = openat(f, "index.html", O_RDONLY);
 			if(tmp_f >= 0) {
-				if(fstat(tmp_f, &buf) < 0 || S_ISDIR(buf.st_mode)) {
+				if(fstat(tmp_f, &tmp_buf) < 0 || S_ISDIR(tmp_buf.st_mode)) {
 					close(tmp_f);
 					tmp_f = -1;
 				} else {
 					mime = "text/html; charset=UTF-8";
+					buf = tmp_buf;
 					close(f);
 					f = tmp_f;
 				}
 			}
 
 			if(tmp_f < 0) {
-				if(method == HTTP_HEAD) {
-					dprintf(c, "%s 200 OK\r\n"
-					       "Content-Type: text/html; charset=UTF-8\r\n"
-					       "\r\n", http);
-				} else {
-					do_dir_list(tmp, c, f, http);
-				}
-				goto exit_loop;
+				mime = "text/html; charset=UTF-8";
+				start_off = 0;
+				num_bytes = -1;
+				total_size = -1;
 			}
 		}
 
@@ -674,6 +666,10 @@ void *thread(void *fd_p)
 			if(mime)
 				if(dprintf(c, "Content-Type: %s\r\n", mime) < 0)
 					syslog(LOG_ERR, "dprintf: %m");
+			if(S_ISDIR(buf.st_mode) && strcmp(http, "HTTP/1.1") == 0) {
+				if(dprintf(c, "Transfer-Encoding: chunked\r\n") < 0)
+					syslog(LOG_ERR, "dprintf: %m");
+			}
 			if(start_off > 0 || num_bytes < buf.st_size) {
 				if(dprintf(c, "Content-Range: bytes %jd-%jd/%jd\r\n",
 						(intmax_t)start_off,
@@ -693,11 +689,15 @@ void *thread(void *fd_p)
 		}
 
 		if(method != HTTP_HEAD || !if_mod ) {
-			while((n = sendfile(c, f, 0, num_bytes)) > 0) {
-				num_bytes -= n;
-				if(num_bytes == 0) break;
+			if(!S_ISDIR(buf.st_mode)) {
+				while((n = sendfile(c, f, 0, num_bytes)) > 0) {
+					num_bytes -= n;
+					if(num_bytes == 0) break;
+				}
+				if(n < 0) syslog(LOG_ERR, "sendfile: %m");
+			} else {
+				do_dir_list(tmp, c, f, http);
 			}
-			if(n < 0) syslog(LOG_ERR, "sendfile: %m");
 		}
 		close(f);
 
