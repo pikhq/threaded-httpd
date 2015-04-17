@@ -22,6 +22,7 @@
 #include <pwd.h>
 #include <ctype.h>
 #include <netinet/tcp.h>
+#include <inttypes.h>
 
 struct request {
 	char buf[4096];
@@ -104,7 +105,6 @@ static void http_error(int fd, int code, char *http)
 
 	if(strcmp(http, "HTTP/0.9") != 0)
 		dprintf(fd, "%s %d %s\r\n"
-			    "Connection: close\r\n"
 			    "Content-type: text/html; charset=UTF-8\r\n"
 			    "Content-Length: %d\r\n"
 			    "\r\n",
@@ -181,13 +181,16 @@ static int fromhex(char c)
 	return -1;
 }
 
-static void url_enc(char *s, int f)
+static void url_enc(char *s, int f, int chunk)
 {
 	for(; *s; s++) {
 		char *c = (char[4]){ *s, 0 };
 		if(!isalnum(*s) && *s != '-' && *s != '_' && *s != '.' && *s != '~' && *s != '/')
 			sprintf(c, "%%%.2X", (unsigned)*s);
-		dprintf(f, "%s", c);
+		if(chunk)
+			dprintf(f, "%x\r\n%s\r\n", (int)strlen(c), c);
+		else
+			dprintf(f, "%s", c);
 	}
 }
 
@@ -196,6 +199,7 @@ static void do_dir_list(char *s, int c, int f, char *http)
 	DIR *d = fdopendir(f);
 	struct dirent *de, **names=0, **tmp;
 	size_t cnt=0, len=0;
+	int chunk = 0;
 
 	if(!d) {
 		http_error(c, 503, http);
@@ -225,42 +229,58 @@ static void do_dir_list(char *s, int c, int f, char *http)
 	}
 	qsort(names, cnt, sizeof *names, (int (*)(const void *, const void *))alphasort);
 
+	if(strcmp(http, "HTTP/1.1") == 0)
+		chunk = 1;
 	if(strcmp(http, "HTTP/0.9") != 0)
 		dprintf(c, "%s 200 OK\r\n"
-		       "Connection: close\r\n"
 		       "Content-Type: text/html; charset=UTF-8\r\n"
-		       "\r\n", http);
-	dprintf(c, "<!DOCTYPE html>\r\n");
+		       "%s"
+		       "\r\n", http,
+		       chunk ? "Transfer-Encoding: chunked\r\n" : "");
+	dprintf(c, "%s<!DOCTYPE html>\r\n%s", chunk ? "11\r\n" : "",
+			chunk ? "\r\n" : "");
 	for(size_t i = 0; i < cnt; i++) {
-		dprintf(c, "<a href=\"/");
-		url_enc(s, c);
-		dprintf(c, "/");
-		url_enc(names[i]->d_name, c);
-		dprintf(c, "\">");
+		dprintf(c, "%s<a href=\"/%s", chunk ? "a\r\n" : "",
+				chunk ? "\r\n" : "");
+		url_enc(s, c, chunk);
+		dprintf(c, "%s/%s", chunk ? "1\r\n" : "",
+				chunk ? "\r\n" : "");
+		url_enc(names[i]->d_name, c, chunk);
+		dprintf(c, "%s\">%s", chunk ? "2\r\n" : "",
+				chunk ? "\r\n" : "");
 		for(size_t j = 0; names[i]->d_name[j]; j++) {
 			switch(names[i]->d_name[j]) {
 			case '<':
-				dprintf(c, "&lt;");
+				dprintf(c, "%s&lt;%s", chunk ? "4\r\n" : "",
+						chunk ? "\r\n" : "");
 				break;
 			case '>':
-				dprintf(c, "&gt;");
+				dprintf(c, "%s&gt;%s", chunk ? "4\r\n" : "",
+						chunk ? "\r\n" : "");
 				break;
 			case '&':
-				dprintf(c, "&amp;");
+				dprintf(c, "%s&amp;%s", chunk ? "5\r\n" : "",
+						chunk ? "\r\n" : "");
 				break;
 			case '"':
-				dprintf(c, "&quot;");
+				dprintf(c, "%s&quot;%s", chunk ? "6\r\n" : "",
+						chunk ? "\r\n" : "");
 				break;
 			case '\'':
-				dprintf(c, "&apos;");
+				dprintf(c, "%s&apos;%s", chunk ? "6\r\n" : "",
+						chunk ? "\r\n" : "");
 				break;
 			default:
-				dprintf(c, "%c", names[i]->d_name[j]);
+				dprintf(c, "%s%c%s", chunk ? "1\r\n" : "", names[i]->d_name[j],
+						chunk ? "\r\n" : "");
 			}
 		}
-		dprintf(c, "</a><br/>\r\n");
+		dprintf(c, "%s</a><br/>\r\n%s", chunk ? "b\r\n" : "",
+				chunk ? "\r\n" : "");
 		free(names[i]);
 	}
+	if(chunk)
+		dprintf(c, "0\r\n\r\n");
 
 	free(names);
 	closedir(d);
@@ -608,7 +628,6 @@ void *thread(void *fd_p)
 					       "\r\n", http);
 				} else {
 					do_dir_list(tmp, c, f, http);
-					close_conn = 1;
 				}
 				goto exit_loop;
 			}
