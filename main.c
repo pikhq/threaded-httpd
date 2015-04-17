@@ -178,7 +178,7 @@ static void url_enc(char *s, int f)
 {
 	for(; *s; s++) {
 		char *c = (char[4]){ *s, 0 };
-		if(!isalnum(*s) && *s != '-' && *s != '_' && *s != '.' && *s != '~')
+		if(!isalnum(*s) && *s != '-' && *s != '_' && *s != '.' && *s != '~' && *s != '/')
 			sprintf(c, "%%%.2X", (unsigned)*s);
 		dprintf(f, "%s", c);
 	}
