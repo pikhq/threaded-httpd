@@ -540,7 +540,7 @@ void *thread(void *fd_p)
 				}
 				start_off = start_range;
 				if(end_range)
-					num_bytes = end_range - start_range;
+					num_bytes = (end_range - start_range) + 1;
 			end_range_parse:
 				;
 			}
