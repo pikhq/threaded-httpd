@@ -414,6 +414,7 @@ void *thread(void *fd_p)
 		int method;
 		int close_conn = 1;
 		time_t if_mod = 0;
+		off_t start_off, num_bytes, total_size;
 
 		sem_post(&sem);
 		c = accept(fd, (struct sockaddr[]){0}, (socklen_t[]){sizeof(struct sockaddr)});
@@ -447,6 +448,9 @@ void *thread(void *fd_p)
 
 	next_req:
 		if_mod = 0;
+		start_off = 0;
+		num_bytes = -1;
+		total_size = -1;
 		if(read_request(c, &req) < 0) {
 			close(c);
 			continue;
@@ -493,6 +497,52 @@ void *thread(void *fd_p)
 				if(end && !*end) {
 					if_mod = timegm(&tmp);
 				}
+			}
+			if(head && strcmp(head, "Range") == 0) {
+				char *end = val;
+				uintmax_t start_range, end_range, total_size;
+				if(strncmp("bytes=", end, 6) != 0) goto end_range_parse;
+				end += 6;
+				errno = 0;
+				start_range = strtoumax(end, &end, 10);
+				if(start_range == UINTMAX_MAX && errno == ERANGE)
+					goto end_range_parse;
+				if(start_range == 0 && errno == EINVAL)
+					goto end_range_parse;
+				if(*end != '-') goto end_range_parse;
+				end++;
+				if(isdigit(*end)) {
+					end_range = strtoumax(end, &end, 10);
+					if(end_range == UINTMAX_MAX && errno == ERANGE)
+						goto end_range_parse;
+					if(end_range < start_range)
+						goto end_range_parse;
+					if(*end == '/') end++;
+				} else if(*end == '/') {
+					end++;
+					end_range = -1;
+				} else if(*end) {
+					goto end_range_parse;
+				}
+
+				if(*end) {
+					total_size = strtoumax(end, &end, 10);
+					if(total_size == UINTMAX_MAX && errno == ERANGE)
+						goto end_range_parse;
+					if(total_size == 0 && errno == EINVAL) {
+						if(*end == '*')
+							total_size = -1;
+						else
+							goto end_range_parse;
+					}
+				} else {
+					total_size = -1;
+				}
+				start_off = start_range;
+				if(end_range)
+					num_bytes = end_range - start_range;
+			end_range_parse:
+				;
 			}
 		} while(head && val);
 
@@ -564,6 +614,20 @@ void *thread(void *fd_p)
 			}
 		}
 
+		if(num_bytes != -1) {
+			if(start_off + num_bytes > buf.st_size) {
+				http_error(c, 416, http);
+				continue;
+			}
+		} else {
+			num_bytes = buf.st_size - start_off;
+		}
+
+		if(total_size != -1 && total_size > buf.st_size) {
+			http_error(c, 416, http);
+			continue;
+		}
+
 		if(strcmp(http, "HTTP/0.9") != 0) {
 			char date[50], mtime[50], expires[50];
 			char *resp = "200 OK";
@@ -582,6 +646,8 @@ void *thread(void *fd_p)
 
 			if(if_mod && if_mod >= buf.st_mtim.tv_sec) {
 				resp = "304 Not Modified";
+			} else if(start_off > 0 || num_bytes < buf.st_size) {
+				resp = "206 Partial Content";
 			}
 
 			if(dprintf(c, "%s %s\r\n", http, resp) < 0)
@@ -589,17 +655,29 @@ void *thread(void *fd_p)
 			if(mime)
 				if(dprintf(c, "Content-Type: %s\r\n", mime) < 0)
 					syslog(LOG_ERR, "dprintf: %m");
+			if(start_off > 0 || num_bytes < buf.st_size) {
+				if(dprintf(c, "Content-Range: bytes %jd-%jd/%jd\r\n",
+						(intmax_t)start_off,
+						(intmax_t)(start_off + num_bytes - 1),
+						(intmax_t)buf.st_size) < 0)
+					syslog(LOG_ERR, "dprintf: %m");
+				lseek(f, start_off, SEEK_SET);
+			}
 			if(dprintf(c, "Content-Length: %jd\r\n"
-				       "Date: %s\r\n"
-				       "Last-Modified: %s\r\n"
-				       "Expires: %s\r\n\r\n",
-				       (intmax_t)buf.st_size, date, mtime,
-				       expires) < 0)
+				      "Date: %s\r\n"
+				      "Accept-Ranges: bytes\r\n"
+				      "Last-Modified: %s\r\n"
+				      "Expires: %s\r\n\r\n",
+				      (intmax_t)buf.st_size, date, mtime,
+				      expires) < 0)
 				syslog(LOG_ERR, "dprintf: %m");
 		}
 
-		if(method != HTTP_HEAD || !if_mod) {
-			while((n = sendfile(c, f, 0, 500 * 1024 * 1024)) > 0);
+		if(method != HTTP_HEAD || !if_mod ) {
+			while((n = sendfile(c, f, 0, num_bytes)) > 0) {
+				num_bytes -= n;
+				if(num_bytes == 0) break;
+			}
 			if(n < 0) syslog(LOG_ERR, "sendfile: %m");
 		}
 		close(f);
