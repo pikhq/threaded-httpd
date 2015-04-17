@@ -87,22 +87,29 @@ static void http_error(int fd, int code, char *http)
 		{503, "Service Unavailable"},
 		{}
 	};
+	char buf[215];
+	size_t len;
 
 	for(msg = msgs; msg->c && msg->c != code; msg++);
+	len = snprintf(buf, sizeof buf,
+		"<!DOCTYPE html>\n"
+		"<title>%d %s</title>\n"
+		"<h1>%d Error</h1>\n"
+		"%s\n",
+		code, msg->c ? msg->msg : "error",
+		code,
+		msg->c ? msg->msg : "An error occured in the request.");
+	if(len > sizeof buf)
+		len = snprintf(buf, sizeof buf, "An error occured in the request.");
 
 	if(strcmp(http, "HTTP/0.9") != 0)
 		dprintf(fd, "%s %d %s\r\n"
 			    "Connection: close\r\n"
 			    "Content-type: text/html; charset=UTF-8\r\n"
+			    "Content-Length: %d\r\n"
 			    "\r\n",
-			    http, code, msg->c ? msg->msg : "Error");
-	dprintf(fd, "<!DOCTYPE html>\n"
-		    "<title>%d %s</title>\n"
-		    "<h1>%d Error</h1>\n"
-		    "%s\n",
-		    code, msg->c ? msg->msg : "error",
-		    code,
-		    msg->c ? msg->msg : "An error occured in the request.");
+			    http, code, msg->c ? msg->msg : "Error", len);
+	dprintf(fd, "%s", buf);
 }
 
 static int read_request(int fd, struct request *req)
@@ -462,15 +469,13 @@ void *thread(void *fd_p)
 			break;
 		default:
 			http_error(c, 501, http);
-			close(c);
-			continue;
+			goto exit_loop;
 		}
 
 		url = get_path(&req, &(char*){0}, &http);
 		if(!url) {
 			http_error(c, 400, http);
-			close(c);
-			continue;
+			goto exit_loop;
 		}
 		if(strcmp(http, "HTTP/1.1") == 0)
 			close_conn = 0;
@@ -478,8 +483,7 @@ void *thread(void *fd_p)
 		do {
 			if(get_header(&req, &head, &val) < 0) {
 				http_error(c, 400, http);
-				close(c);
-				continue;
+				goto exit_loop;
 			}
 			if(head && strcmp(head, "Connection") == 0) {
 				if(strcmp(http, "HTTP/1.1") == 0
@@ -548,14 +552,12 @@ void *thread(void *fd_p)
 
 		if((tmp = strstr(url, "/../"))) {
 			http_error(c, 403, http);
-			close(c);
-			continue;
+			goto exit_loop;
 		}
 		if((tmp = strrchr(url, '/'))) {
 			if(strcmp(tmp, "/..") == 0) {
 				http_error(c, 403, http);
-				close(c);
-				continue;
+				goto exit_loop;
 			}
 		}
 		for(tmp = url; *tmp == '/'; tmp++);
@@ -577,15 +579,13 @@ void *thread(void *fd_p)
 				http_error(c, 500, http);
 				break;
 			}
-			close(c);
-			continue;
+			goto exit_loop;
 		}
 
 		if(fstat(f, &buf) < 0) {
 			http_error(c, 500, http);
 			close(f);
-			close(c);
-			continue;
+			goto exit_loop;
 		}
 
 		if(S_ISDIR(buf.st_mode)) {
@@ -617,7 +617,7 @@ void *thread(void *fd_p)
 		if(num_bytes != -1) {
 			if(start_off + num_bytes > buf.st_size) {
 				http_error(c, 416, http);
-				continue;
+				goto exit_loop;
 			}
 		} else {
 			num_bytes = buf.st_size - start_off;
@@ -625,7 +625,7 @@ void *thread(void *fd_p)
 
 		if(total_size != -1 && total_size > buf.st_size) {
 			http_error(c, 416, http);
-			continue;
+			goto exit_loop;
 		}
 
 		if(strcmp(http, "HTTP/0.9") != 0) {
