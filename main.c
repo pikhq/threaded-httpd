@@ -76,7 +76,7 @@ static void http_error(int fd, int code, char *http)
 {
 	static const struct {
 		int c;
-		char msg[25];
+		char *msg;
 	} *msg, msgs[] = {
 		{400, "Bad Request"},
 		{403, "Forbidden"},
