@@ -729,7 +729,7 @@ int main()
 	pthread_attr_init(&attr);
 	sem_init(&sem, 0, 0);
 	pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);
-	pthread_attr_setstacksize(&attr, PTHREAD_STACK_MIN > 12288 ? PTHREAD_STACK_MIN : 12288);
+	pthread_attr_setstacksize(&attr, PTHREAD_STACK_MIN > 24 * 1024 ? PTHREAD_STACK_MIN : 24 * 1024);
 
 	int status;
 	struct addrinfo hints = {
