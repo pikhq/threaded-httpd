@@ -195,6 +195,11 @@ static void url_enc(char *s, int f, int chunk)
 	}
 }
 
+static int alphasort_q(const void *a, const void *b)
+{
+	return alphasort((const struct dirent**)a, (const struct dirent**)b);
+}
+
 static void do_dir_list(char *s, int c, int f, char *http)
 {
 	DIR *d = fdopendir(f);
@@ -228,7 +233,7 @@ static void do_dir_list(char *s, int c, int f, char *http)
 		if (names) while(cnt-->0) free(names[cnt]);
 		free(names);
 	}
-	qsort(names, cnt, sizeof *names, (int (*)(const void *, const void *))alphasort);
+	qsort(names, cnt, sizeof *names, alphasort_q);
 
 	if(strcmp(http, "HTTP/1.1") == 0)
 		chunk = 1;
