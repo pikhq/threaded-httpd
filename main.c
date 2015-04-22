@@ -500,12 +500,12 @@ void *thread(void *fd_p)
 				http_error(c, 400, http);
 				goto exit_loop;
 			}
-			if(head && strcmp(head, "Connection") == 0) {
+			if(head && strcasecmp(head, "Connection") == 0) {
 				if(strcmp(http, "HTTP/1.1") == 0
 				  && strcmp(val, "close") == 0)
 					close_conn = 1;
 			}
-			if(head && strcmp(head, "If-Modified-Since") == 0) {
+			if(head && strcasecmp(head, "If-Modified-Since") == 0) {
 				char *end;
 				struct tm tmp;
 				end = strptime(val, "%a, %d %b %Y %H:%M:%S GMT", &tmp);
@@ -517,7 +517,7 @@ void *thread(void *fd_p)
 					if_mod = timegm(&tmp);
 				}
 			}
-			if(head && strcmp(head, "Range") == 0) {
+			if(head && strcasecmp(head, "Range") == 0) {
 				char *end = val;
 				uintmax_t start_range, end_range, total_size;
 				if(strncmp("bytes=", end, 6) != 0) goto end_range_parse;
