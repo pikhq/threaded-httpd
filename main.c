@@ -426,6 +426,21 @@ static const char *mime_type(char *path)
 	return NULL;
 }
 
+static time_t parse_http_time(const char *s)
+{
+	char *end;
+	struct tm tmp;
+	end = strptime(s, "%a, %d %b %Y %H:%M:%S GMT", &tmp);
+	if(!end || *end)
+		end = strptime(s, "%A, %d-%b-%y %H:%M:%S GMT", &tmp);
+	if(!end || *end)
+		end = strptime(s, "%a %b %d %H:%M:%S %Y", &tmp);
+	if(end && !*end) {
+		return timegm(&tmp);
+	}
+	return -1;
+}
+
 void *thread(void *fd_p)
 {
 	int fd = *(int*)fd_p;
@@ -440,7 +455,7 @@ void *thread(void *fd_p)
 		ssize_t n;
 		int method;
 		int close_conn = 1;
-		time_t if_mod = 0;
+		time_t if_mod = 0, if_range = 0;
 		off_t start_off, num_bytes, total_size;
 
 		sem_post(&sem);
@@ -475,6 +490,7 @@ void *thread(void *fd_p)
 
 	next_req:
 		if_mod = 0;
+		if_range = 0;
 		start_off = 0;
 		num_bytes = -1;
 		total_size = -1;
@@ -511,16 +527,14 @@ void *thread(void *fd_p)
 					close_conn = 1;
 			}
 			if(head && strcasecmp(head, "If-Modified-Since") == 0) {
-				char *end;
-				struct tm tmp;
-				end = strptime(val, "%a, %d %b %Y %H:%M:%S GMT", &tmp);
-				if(!end || *end)
-					end = strptime(val, "%A, %d-%b-%y %H:%M:%S GMT", &tmp);
-				if(!end || *end)
-					end = strptime(val, "%a %b %d %H:%M:%S %Y", &tmp);
-				if(end && !*end) {
-					if_mod = timegm(&tmp);
-				}
+				time_t tmp = parse_http_time(val);
+				if(tmp != -1)
+					if_mod = tmp;
+			}
+			if(head && strcasecmp(head, "If-Range") == 0) {
+				time_t tmp = parse_http_time(val);
+				if(tmp != -1)
+					if_range = tmp;
 			}
 			if(head && strcasecmp(head, "Range") == 0) {
 				char *end = val;
@@ -643,6 +657,13 @@ void *thread(void *fd_p)
 		if(total_size != -1 && total_size > buf.st_size) {
 			http_error(c, 416, http);
 			goto exit_loop;
+		}
+
+		if(if_range && (start_off > 0 || num_bytes < buf.st_size)) {
+			if(if_range < buf.st_mtim.tv_sec) {
+				start_off = 0;
+				num_bytes = buf.st_size;
+			}
 		}
 
 		if(strcmp(http, "HTTP/0.9") != 0) {
