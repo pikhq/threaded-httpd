@@ -696,6 +696,9 @@ void *thread(void *fd_p)
 			if(S_ISDIR(buf.st_mode) && strcmp(http, "HTTP/1.1") == 0) {
 				if(dprintf(c, "Transfer-Encoding: chunked\r\n") < 0)
 					syslog(LOG_ERR, "dprintf: %m");
+			} else {
+				if(dprintf(c, "Content-Length: %jd\r\n", (intmax_t)buf.st_size) < 0)
+					syslog(LOG_ERR, "dprintf: %m");
 			}
 			if(start_off > 0 || num_bytes < buf.st_size) {
 				if(dprintf(c, "Content-Range: bytes %jd-%jd/%jd\r\n",
@@ -705,13 +708,11 @@ void *thread(void *fd_p)
 					syslog(LOG_ERR, "dprintf: %m");
 				lseek(f, start_off, SEEK_SET);
 			}
-			if(dprintf(c, "Content-Length: %jd\r\n"
-				      "Date: %s\r\n"
+			if(dprintf(c, "Date: %s\r\n"
 				      "Accept-Ranges: bytes\r\n"
 				      "Last-Modified: %s\r\n"
 				      "Expires: %s\r\n\r\n",
-				      (intmax_t)buf.st_size, date, mtime,
-				      expires) < 0)
+				      date, mtime, expires) < 0)
 				syslog(LOG_ERR, "dprintf: %m");
 		}
 
