@@ -697,7 +697,7 @@ void *thread(void *fd_p)
 				if(dprintf(c, "Transfer-Encoding: chunked\r\n") < 0)
 					syslog(LOG_ERR, "dprintf: %m");
 			} else {
-				if(dprintf(c, "Content-Length: %jd\r\n", (intmax_t)buf.st_size) < 0)
+				if(dprintf(c, "Content-Length: %jd\r\n", (intmax_t)num_bytes) < 0)
 					syslog(LOG_ERR, "dprintf: %m");
 			}
 			if(start_off > 0 || num_bytes < buf.st_size) {
