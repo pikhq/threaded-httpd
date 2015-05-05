@@ -456,7 +456,7 @@ void *thread(void *fd_p)
 		int method;
 		int close_conn = 1;
 		time_t if_mod = 0, if_range = 0;
-		off_t start_off, num_bytes, total_size;
+		off_t start_off, num_bytes;
 
 		sem_post(&sem);
 		c = accept(fd, (struct sockaddr[]){0}, (socklen_t[]){sizeof(struct sockaddr)});
@@ -493,7 +493,6 @@ void *thread(void *fd_p)
 		if_range = 0;
 		start_off = 0;
 		num_bytes = -1;
-		total_size = -1;
 		if(read_request(c, &req) < 0) {
 			close(c);
 			continue;
@@ -538,7 +537,7 @@ void *thread(void *fd_p)
 			}
 			if(head && strcasecmp(head, "Range") == 0) {
 				char *end = val;
-				uintmax_t start_range, end_range, total_size;
+				uintmax_t start_range = 0, end_range = 0;
 				if(strncmp("bytes=", end, 6) != 0) goto end_range_parse;
 				end += 6;
 				errno = 0;
@@ -555,27 +554,10 @@ void *thread(void *fd_p)
 						goto end_range_parse;
 					if(end_range < start_range)
 						goto end_range_parse;
-					if(*end == '/') end++;
-				} else if(*end == '/') {
-					end++;
-					end_range = -1;
 				} else if(*end) {
 					goto end_range_parse;
 				}
 
-				if(*end) {
-					total_size = strtoumax(end, &end, 10);
-					if(total_size == UINTMAX_MAX && errno == ERANGE)
-						goto end_range_parse;
-					if(total_size == 0 && errno == EINVAL) {
-						if(*end == '*')
-							total_size = -1;
-						else
-							goto end_range_parse;
-					}
-				} else {
-					total_size = -1;
-				}
 				start_off = start_range;
 				if(end_range)
 					num_bytes = (end_range - start_range) + 1;
@@ -641,7 +623,6 @@ void *thread(void *fd_p)
 				mime = "text/html; charset=UTF-8";
 				start_off = 0;
 				num_bytes = -1;
-				total_size = -1;
 			}
 		}
 
@@ -652,11 +633,6 @@ void *thread(void *fd_p)
 			}
 		} else {
 			num_bytes = buf.st_size - start_off;
-		}
-
-		if(total_size != -1 && total_size > buf.st_size) {
-			http_error(c, 416, http);
-			goto exit_loop;
 		}
 
 		if(if_range && (start_off > 0 || num_bytes < buf.st_size)) {
